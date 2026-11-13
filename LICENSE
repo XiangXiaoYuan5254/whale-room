@@ -19,12 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-This license covers the code in this repository only. The character "大肥鱼"
-(design and three-view art by 暮之鸣, bilibili uid 38871361), the 3D models in
-public/models/ generated from that art, and the images in 模型素材/ and
-public/assets/ are fan materials; their rights stay with the original authors
-and are not licensed under MIT. three.js in public/vendor/three/ is under its
-own MIT license (public/vendor/three/LICENSE).
