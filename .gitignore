@@ -2,5 +2,8 @@
 config.json
 # 她拍的照片
 photos/
+# 3D 模型太大，不进仓库，放在 GitHub 的 Release 里（.rig.json 这种小的对位文件照常进仓库）
+public/models/*.glb
+public/models/parts/
 node_modules/
 .DS_Store

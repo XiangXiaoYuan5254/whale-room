@@ -8,20 +8,23 @@
 
 需要 Node 22 或更新版本，不用 `npm install`（three.js 已经放在 `public/vendor` 里）。
 
-角色的 3D 模型（`public/models/*.glb`，每个几十 MB）放在 Git LFS 里，克隆前先装好 [Git LFS](https://git-lfs.com)：
-
-```bash
-git lfs install
-```
-
 ```bash
 git clone https://github.com/XiangXiaoYuan5254/whale-room.git
 ```
 
-没装 LFS 的话，模型文件只是几行文字的「指针」，房间照样能开，她会换成内置的几何体角色。
-
 ```bash
 cd whale-room
+```
+
+角色的 3D 模型每个 80 多 MB，没放在仓库里，在 [Release](https://github.com/XiangXiaoYuan5254/whale-room/releases/tag/models-v1) 里下载。房间用的是这一个，下载到 `public/models/`：
+
+```bash
+curl -L -o public/models/6ce7ed03b17f6b032e5946a20d74bac4.glb https://github.com/XiangXiaoYuan5254/whale-room/releases/download/models-v1/6ce7ed03b17f6b032e5946a20d74bac4.glb
+```
+
+不下载也能开，她会用内置的几何体角色（比较粗糙）。
+
+```bash
 ```
 
 ```bash
@@ -188,7 +191,7 @@ public/assets/        图片素材（墙上画像用的那张三视图正面；�
 - **手短头大**：手举不过头顶（会埋进头发里），所以挥手、伸懒腰都是往前上方伸。手也只够得到胸口跟前、下巴以下的东西，所以拿低处的东西都是先跪下再伸手。
 - **头发是长在模型上的**：弯腰幅度大了，后面的长发会整片翘起来，所以弯腰都控制在不大的角度。
 - **电脑上的视频是封面**，不是真的在播放；声音是合成的示意音；歌是「音乐」App 在放，所以声音从电脑出来，跟房间页面开不开声音无关。
-- **现在这个模型没有尾巴**（生成时用的图里尾巴只露一个尖）。从另一个模型上切下来的尾巴存在 `public/models/parts/tail.glb`，还没接上。`public/models/` 里另外两个 `.glb` 是后来生成、没采用的版本，`config.example.json` 里已固定使用第一版。
+- **现在这个模型没有尾巴**（生成时用的图里尾巴只露一个尖）。从另一个模型上切下来的尾巴（Release 里的 `tail.glb`，放在 `public/models/parts/`）还没接上。Release 里另外两个 `.glb` 是后来生成、没采用的版本，`config.example.json` 里已固定使用第一版。
 - 模型有 150 万面：在 Apple Silicon 的 Mac 上很流畅，在虚拟机或者集成显卡上大约 20 多帧（太卡时页面会自己降分辨率、关辉光）。
 - **连 QQ 时**留意终端里有没有 `[onebot] 已连接`、`[qq] 主人 → …`、`[photo] … 已发到 QQ` 这些日志，没有的话多半是地址、token 或 QQ 号没填对。
 - **放歌只支持 macOS**（控制的是系统自带的「音乐」App）：第一次放时 macOS 会弹窗问「是否允许终端控制“音乐”」，要点允许；没有叫这个名字的歌单时，她会说音箱没反应，终端/控制台里写着原因。别的系统上音箱按了没反应，其它功能不受影响。
@@ -225,6 +228,6 @@ QQ ⇄ NapCat（OneBot 11 正向 WebSocket）
 ## 来源与许可
 
 - 代码：MIT 许可，见 [LICENSE](LICENSE)。
-- 角色「大肥鱼」的设定与三视图：暮之鸣（B 站 38871361）。`public/models/` 里的 3D 模型是用这套三视图通过图生 3D 工具生成的；`模型素材/`、`public/assets/` 里的图也都是同人素材。这些不在 MIT 许可范围内，权利归原作者。
+- 角色「大肥鱼」的设定与三视图：暮之鸣（B 站 38871361）。Release 里的 3D 模型是用这套三视图通过图生 3D 工具生成的；`模型素材/`、`public/assets/` 里的图也都是同人素材。这些不在 MIT 许可范围内，权利归原作者。
 - 创意来自《欢迎光临大肥鱼的家》（BV1GrxW6XEgN）。
 - 渲染用 three.js（MIT，许可证在 `public/vendor/three/LICENSE`）。
