@@ -2,6 +2,16 @@
 
 一个真 3D 的小房间。大肥鱼住在里面，自己决定干什么、自己走过去干；你在 QQ 上和她聊天，房间里的她会同步反应。
 
+- **灵感来源**：B 站 UP 主「-止于言情--」的视频《[欢迎光临大肥鱼的家](https://www.bilibili.com/video/BV1GrxW6XEgN)》（BV1GrxW6XEgN）。
+- **角色**：大肥鱼，设定与三视图来自暮之鸣（B 站 uid 38871361）。
+- **她的「脑子」**：跑在 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/deepseek-harness) 里的 AI。房间只是她的身体，聊天、刷 B 站这些靠下面几个 DSH 插件（都是别的作者写的，本仓库不包含它们的代码）：
+  - **QQ 聊天**：[dsh-onebot-qq](https://github.com/mario841859784/dsh-onebot)，OneBot 11 协议，配 [NapCat](https://github.com/NapNeko/NapCatQQ) 登录 QQ。
+  - **刷 B 站**：[dsh-bili-whale](https://github.com/Alterssss/dsh-bili-whale)，她自己按作息刷 B 站、看视频、写日记，看到好的就在 QQ 上分享给你；分享的视频，房间里的她会跑去电脑前看。
+  - **人设与记忆**：[dsh-soul-md](https://github.com/Scorp1o117/dsh-soul-md)。
+  - **主动搭话**：[dsh-speak-up](https://github.com/Yuuyuko-uu/dsh-speak-up)，没人理她的时候她也会自己起个话头。
+
+  怎么把它们和房间接起来，见下面「[和 DSH 及其他插件结合](#和-dsh-及其他插件结合)」。
+
 和「播放几段固定动作视频」的做法不同，这里**没有任何预先录好的动画或视频**：房间、角色、每一个动作都是浏览器实时算出来的，镜头可以随便转。
 
 ## 启动
@@ -229,5 +239,6 @@ QQ ⇄ NapCat（OneBot 11 正向 WebSocket）
 
 - 代码：MIT 许可，见 [LICENSE](LICENSE)。
 - 角色「大肥鱼」的设定与三视图：暮之鸣（B 站 38871361）。Release 里的 3D 模型是用这套三视图通过图生 3D 工具生成的；`模型素材/`、`public/assets/` 里的图也都是同人素材。这些不在 MIT 许可范围内，权利归原作者。
-- 创意来自《欢迎光临大肥鱼的家》（BV1GrxW6XEgN）。
+- `模型素材/另一版（dsh-pet 仓库的图，没尾巴）/` 里的三张图来自 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet)（MIT，Copyright (c) 2026 PC2005-cloud）。
+- 创意来自 B 站 UP 主「-止于言情--」的《欢迎光临大肥鱼的家》（BV1GrxW6XEgN）。
 - 渲染用 three.js（MIT，许可证在 `public/vendor/three/LICENSE`）。
