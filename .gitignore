@@ -1,0 +1,6 @@
+# 自己的配置（里面有 NapCat 的 token 和 QQ 号）：从 config.example.json 复制一份改
+config.json
+# 她拍的照片
+photos/
+node_modules/
+.DS_Store

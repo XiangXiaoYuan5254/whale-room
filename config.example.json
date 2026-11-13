@@ -1,0 +1,32 @@
+{
+  "port": 5177,
+  "host": "127.0.0.1",
+  "character": {
+    "name": "大肥鱼",
+    "model": "6ce7ed03b17f6b032e5946a20d74bac4.glb"
+  },
+  "onebot": {
+    "enabled": false,
+    "url": "ws://127.0.0.1:3001",
+    "accessToken": "",
+    "botQQ": "",
+    "ownerQQ": [],
+    "showOthers": false,
+    "pollActiveMs": 1500,
+    "pollIdleMs": 15000,
+    "activeWindowMs": 120000
+  },
+  "weather": {
+    "mode": "simulated",
+    "latitude": null,
+    "longitude": null
+  },
+  "music": {
+    "enabled": true,
+    "auto": true,
+    "playlist": "大肥鱼的歌单"
+  },
+  "photo": {
+    "sendToQQ": true
+  }
+}

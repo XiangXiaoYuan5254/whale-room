@@ -1,0 +1,14 @@
+{
+  "name": "whale-room",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "大肥鱼的家：一个真 3D 的房间，她在里面自由活动，并与 QQ 聊天同步",
+  "scripts": {
+    "start": "node server.mjs",
+    "mock-qq": "node bridge/mock-onebot.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
