@@ -1,0 +1,9 @@
+{
+  "name": "whale-room-app",
+  "productName": "大肥鱼的家",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs",
+  "description": "大肥鱼的家的桌面窗口（Electron）：自带房间服务，不会被浏览器的睡眠标签页冻住"
+}

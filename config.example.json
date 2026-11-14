@@ -28,5 +28,8 @@
   },
   "photo": {
     "sendToQQ": true
+  },
+  "app": {
+    "keepAwake": true
   }
 }

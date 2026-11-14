@@ -9,3 +9,5 @@ node_modules/
 .DS_Store
 # 给自己看的开发笔记（目前的限制等）
 开发笔记.md
+# npm run app:mac 做出来的 大肥鱼的家.app
+dist/

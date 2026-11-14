@@ -143,6 +143,8 @@ ui.on('test', (kind, text) => {
 new Picker(canvas, camera, scene, (name, point) => brain.onPick(name, point));
 
 // ---------- 和本地服务通信：QQ 事件、身体指令、状态上报 ----------
+// 这个页面自己的 id：服务靠它分清哪个页面醒着、哪个被浏览器冻住了（开着多个页面时也不会搞混）
+const PAGE_ID = globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2) + Date.now().toString(36);
 let greeted = false;
 /** 接口带了 wait 的指令：做完 / 到位 / 被打断时把结果告诉本地服务，它再回给在等的那一边（她的 AI 本体）。 */
 function reportAct(id, result) {
@@ -150,7 +152,7 @@ function reportAct(id, result) {
     .catch((err) => console.warn('没能把动作的结果报给本地服务', err));
 }
 function connect() {
-  const es = new EventSource('/events');
+  const es = new EventSource('/events?page=' + PAGE_ID);
   es.onmessage = (m) => {
     let ev;
     try { ev = JSON.parse(m.data); } catch (err) { console.warn('收到无法解析的事件', err); return; }
@@ -292,16 +294,25 @@ if (query.has('dev')) import('./devtools.js').catch((err) => console.error('[调
 // 页面被切到后台时浏览器会停掉画面刷新，普通定时器也会被压到很慢。
 // 所以用一个 Worker 当节拍器（它不受这个限制）：后台时按真实时间补算模拟，这样她不会「冻住」，
 // QQ 来消息照样有反应；同时每 2 秒把身体状态上报给本地服务（她的 AI 本体读到的就是这个）。
+function report() {
+  fetch('/api/report?page=' + PAGE_ID, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(brain.report()) })
+    .catch((err) => console.debug('状态上报失败（服务没开？）', err));
+}
 const ticker = new Worker(URL.createObjectURL(new Blob(['setInterval(() => postMessage(0), 250)'], { type: 'text/javascript' })));
 let ticks = 0;
 ticker.onmessage = () => {
-  if (document.hidden) {
-    const now = performance.now();
+  const now = performance.now();
+  // 在后台，或者画面因为别的原因停了一秒以上（窗口被藏起来、被挡住……）：按真实时间补算
+  if (document.hidden || now - last > 1000) {
     let rest = Math.min(3, (now - last) / 1000); last = now;
     while (rest > 0.001) { const step = Math.min(0.05, rest); simulate(step); rest -= step; }
   }
-  if (++ticks % 8 === 0) {
-    fetch('/api/report', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(brain.report()) })
-      .catch((err) => console.debug('状态上报失败（服务没开？）', err));
-  }
+  if (++ticks % 8 === 0) report();
 };
+// 但标签页太久没人看，浏览器会把整页冻住（Edge 的睡眠标签页之类），节拍器也跟着停。
+// 冻住之前先跟本地服务说一声，它就知道这是「睡着了」而不是「关了」；醒来马上报一次，别让服务多等 2 秒。
+const lifecycle = (event) => navigator.sendBeacon?.(`/api/lifecycle?page=${PAGE_ID}&event=${event}`);
+document.addEventListener('freeze', () => lifecycle('freeze'));
+document.addEventListener('resume', report);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) report(); });
+addEventListener('pagehide', (e) => lifecycle(e.persisted ? 'freeze' : 'close')); // persisted：进了往返缓存，回来还是这一页

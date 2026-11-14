@@ -43,6 +43,39 @@ node server.mjs
 
 然后用浏览器打开 <http://127.0.0.1:5177>。
 
+页面切到后台、窗口被挡住都没关系，她照样在里面生活。但浏览器会把很久没人看的标签页整个冻住来省电，比如 Edge 的「睡眠标签页」（默认 2 小时）、Chrome 的节能模式。冻住时她就停在原地不动，她的 AI 查到的是「房间睡着了」。想让她一直醒着，就把这个站点加进白名单：Edge 在「设置 → 系统和性能 → 从不让这些站点进入睡眠状态」里添加 `127.0.0.1:5177`（找不到就在设置里搜「睡眠」）。Chrome 在「设置 → 性能」里，把它加进「保持活跃」的网站名单。更省心的办法是用下面的桌面 app。
+
+### 桌面 app（推荐）
+
+一个专门开房间的窗口，自带房间服务，不用再开 `node server.mjs` 和浏览器：
+
+```bash
+npm run app
+```
+
+- **不会睡着**：浏览器的睡眠标签页、节能模式冻不住它，macOS 的 App Nap 也拖不慢它。
+- **关掉窗口她还在**：点窗口的关闭按钮只是把窗口藏起来，她照样在房间里生活，点 Dock 图标就能叫回来。真要关掉房间，就退出 app（⌘Q）。
+- **出了问题自己恢复**：页面崩了、卡死超过 30 秒、服务断了，都会自己重新打开。服务和页面的输出都记在 `~/Library/Logs/大肥鱼的家/room.log`，菜单「帮助 → 打开日志」可以直接打开。
+- **服务已经在跑也没关系**：要是终端里已经开着 `node server.mjs`，app 就直接用它；它后来被关了，app 会自己接着跑一个。
+- **Mac 不会闲置睡眠**：为了不让系统挂起 app，开着它时 Mac 不会因为闲置自动睡眠，屏幕照样会关。她的 QQ 本来就要电脑醒着才能回。不想这样，就在 `config.json` 里写 `"app": { "keepAwake": false }`。
+- **别同时开着浏览器里的房间页面**：两个页面就是两个身体，会各做各的，拍照也会拍两张。
+
+`npm run app` 会按这个顺序找 Electron：环境变量 `ELECTRON_PATH`、项目里装的 `electron`、装了 DSH 的话用它自带的（`~/.dsh/electron`）。都没有的话，装一个：
+
+```bash
+npm install --no-save electron
+```
+
+在国内下载慢，可以先设置镜像 `export ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/` 再装。
+
+**做成能双击打开的 app（macOS）**：
+
+```bash
+npm run app:mac
+```
+
+会在 `dist/` 里做出一个带她头像的「大肥鱼的家.app」，拖进「应用程序」或者 Dock 里就行。菜单里可以勾选「开机时自动打开」。这个 app 里只放了一个入口，真正的代码还在项目文件夹里：改了代码，重开 app 就会生效；但挪了项目文件夹的位置，要重新做一次。
+
 自己的设置写在 `config.json` 里（不进 git）。还没有这个文件时，服务先用 `config.example.json` 的默认值跑：QQ 不连，其余功能都能用。要连 QQ，就把它复制一份：
 
 ```bash
@@ -111,7 +144,7 @@ cp config.example.json config.json
 
 为什么她的回复有一两秒延迟：NapCat 的 `reportSelfMessage` 是 `false`（默认）时，她自己发出去的消息不会被推送，所以房间服务在有来信后每 1.5 秒查一次聊天历史把它补上。不需要改 NapCat 的配置。
 
-**她看完消息才回你。** 她的 AI 收到你的消息一般两三秒就写好了回复，比房间里的她跑去拿手机快得多。所以 QQ 插件在发她的回复和表情包之前，先问房间服务 `GET /api/read-wait`：她有没有拿到手机、把你的消息看完。看完了才发出去，最多等 25 秒；房间没开或者服务没跑，就直接发。这一步要改 QQ 插件，见「和 DSH 及其他插件结合」。另外，聊天时 `/api/state` 里多了 `before`，是手机响之前她在干什么，你问「在干嘛」时她答得上来。
+**她看完消息才回你。** 她的 AI 收到你的消息一般两三秒就写好了回复，比房间里的她跑去拿手机快得多。所以 QQ 插件在发她的回复和表情包之前，先问房间服务 `GET /api/read-wait`：她有没有拿到手机、把你的消息看完。看完了才发出去，最多等 25 秒；房间没开、页面被浏览器冻住了，或者服务没跑，就直接发。这一步要改 QQ 插件，见「和 DSH 及其他插件结合」。另外，聊天时 `/api/state` 里多了 `before`，是手机响之前她在干什么，你问「在干嘛」时她答得上来。
 
 ### 让她的意识直接控制身体
 
@@ -130,6 +163,7 @@ curl -s --max-time 110 -X POST http://127.0.0.1:5177/api/act -H 'content-type: a
 - 先看消息再动手：你发来消息、她的 AI 马上下了指令时，身体不会半路扭头去做。她会先跑去拿起手机，把你的消息看完、点点头，再放下手机去做。跑一趟就完的事（关音响、开灯、浇花、跳舞、拍照……）做完还会回去拿起手机，拿到了才算「做完了」。这时她的 AI 才发出回复，房间里她正好拿着手机在打字。所以一条带 `wait` 的指令一般要等十几秒到一分钟。
 - 「做完」怎么算：一次性的事（拍照、浇花、跳舞、开灯、放歌……）是真做完了，拍照是照片已经发出去；要待一阵的事（看窗外、玩电脑、看书、躺着、睡觉、吃饭……）是已经待下了：坐上窗台、钻进被窝、坐下开吃。
 - 返回里有 `done`（做完没有）、`doing`（她现在在干什么）。拍照还有 `photo.taken` / `photo.sentToQQ` / `photo.file`，放歌有 `music`。没做完会带上 `timeout` 超时、`cancelled` 被打断或 `error`。
+- 房间分三种情况：开着（`roomOpen: true`）、没开、睡着了。睡着了是页面还在，但被浏览器冻住了，这时 `/api/state` 返回 `roomAsleep: true`，还有 `lastDoing`（睡着前在干什么）和 `asleepMin`（大约睡了几分钟）。没开和睡着了时，`/api/act` 都立刻返回 `delivered: 0`，不会把指令攒给冻住的页面，免得它醒来时把几个小时前的指令一口气做掉。
 - 不带 `wait` 时返回里会有 `"done":false` 和一句提醒，告诉她身体还没做完。
 - 她亲自指挥身体以后，她紧接着回你的那句话会边做边说，不再把正在做的事打断。她回复里的「拍了」「我在窗边」也不会再被当成新指令重做一遍，等你下一条消息进来才恢复。`node room.mjs do …` 默认就带着 `wait`。
 
@@ -161,6 +195,7 @@ node bridge/mock-onebot.mjs
 | `weather.mode` | `simulated`（自己变）或 `real`（真实天气，需填 `latitude` / `longitude`，用 open-meteo，不需要密钥） |
 | `music.enabled` / `music.auto` / `music.playlist` | 能不能放歌 / 她会不会自己去放 / 放「音乐」App 里的哪个歌单 |
 | `photo.sendToQQ` | 拍的照片要不要发到你的 QQ（不发也会存在 `photos/`） |
+| `app.keepAwake` | 桌面 app 开着时，要不要让 Mac 保持醒着、不被系统挂起（默认 `true`；屏幕照样会关） |
 
 ## 目录
 
@@ -170,6 +205,12 @@ room.mjs              命令行小工具（state / actions / do）
 config.example.json   配置模板（复制成 config.json 再改；config.json 不进 git）
 bridge/onebot.mjs     OneBot 11 客户端（连 NapCat）
 bridge/mock-onebot.mjs  假 NapCat，测试用
+app/                  桌面 app（Electron）
+  main.mjs            主进程：开窗口、在 app 里跑房间服务、不让系统挂起、崩了自己恢复
+  launch.mjs          npm run app：找到 Electron 并打开
+  make-mac-app.mjs    npm run app:mac：做出「大肥鱼的家.app」
+  electron-path.mjs   去哪找 Electron
+  icon.png            app 图标
 public/src/
   room.js             房间和家具
   env.js              昼夜、天气、窗外的城市
@@ -214,7 +255,7 @@ QQ ⇄ NapCat（OneBot 11 正向 WebSocket）
    GET http://127.0.0.1:5177/api/read-wait?timeout=25
    ```
 
-   房间页面开着时，这个请求会一直挂着，直到房间里的她拿到手机、把你的消息看完（或者超时）才返回 `{ "ready": true/false, "waited": 秒数, "doing": "她在干嘛" }`；房间页面没开时立刻返回 `{ "ready": true, "roomOpen": false }`。插件拿到返回（不管 `ready` 是什么）或者请求失败（服务没开），都照常发出去，所以加上它不会让回复丢掉，最多晚 25 秒。
+   房间页面开着时，这个请求会一直挂着，直到房间里的她拿到手机、把你的消息看完（或者超时）才返回 `{ "ready": true/false, "waited": 秒数, "doing": "她在干嘛" }`；房间页面没开时立刻返回 `{ "ready": true, "roomOpen": false }`，页面被浏览器冻住了（她不会动，等也白等）时立刻返回 `{ "ready": true, "roomOpen": false, "roomAsleep": true }`。插件拿到返回（不管 `ready` 是什么）或者请求失败（服务没开），都照常发出去，所以加上它不会让回复丢掉，最多晚 25 秒。
 4. **（可选）心里话**：她写成「（独白：……）」的话不会发到 QQ，房间也就看不到。想让它在房间里冒成云朵气泡，让她的 AI 同时调用一次 `{"action":"think","text":"……"}`（写法在 [给鲸鲸的说明.md](给鲸鲸的说明.md) 里）。
 5. **B 站视频**：聊天里出现 B 站链接或分享卡片时，房间服务自己去查 B 站的公开接口拿标题和封面，不经过她的 AI。
 
@@ -224,6 +265,7 @@ QQ ⇄ NapCat（OneBot 11 正向 WebSocket）
 
 - 代码：MIT 许可，见 [LICENSE](LICENSE)。
 - 角色「大肥鱼」的设定与三视图：暮之鸣（B 站 38871361）。Release 里的 3D 模型是用这套三视图通过图生 3D 工具生成的；`模型素材/`、`public/assets/` 里的图也都是同人素材。这些不在 MIT 许可范围内，权利归原作者。
+- `app/icon.png`（桌面 app 的图标）用的是大肥鱼的同人头像，同样不在 MIT 许可范围内，权利归原作者。
 - `模型素材/另一版（dsh-pet 仓库的图，没尾巴）/` 里的三张图来自 [dsh-pet](https://github.com/PC2005-cloud/dsh-pet)（MIT，Copyright (c) 2026 PC2005-cloud）。
 - 创意来自 B 站 UP 主「-止于言情--」的《欢迎光临大肥鱼的家》（BV1GrxW6XEgN）。
 - 渲染用 three.js（MIT，许可证在 `public/vendor/three/LICENSE`）。

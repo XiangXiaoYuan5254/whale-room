@@ -28,17 +28,56 @@ function loadConfig() {
 const config = loadConfig();
 const log = (...a) => console.log(new Date().toLocaleTimeString('zh-CN', { hour12: false }), ...a);
 
+// ---------- 房间页面：开着、睡着了，还是关了 ----------
+// 每个打开着的房间页面有自己的 id（网址参数 page=）。浏览器会把很久没人看的标签页冻住
+// （Edge 的睡眠标签页、Chrome 的节能冻结之类）：冻住的页面连接可能还挂着，但身体不动、也不上报了。
+// 所以光看「有没有连着」不够，要看它最近有没有上报。
+const FRESH = 20000; // 页面这么久没上报，就当它不在动了
+const ASLEEP_KEEP = 24 * 3600 * 1000; // 睡着后连接也断了的页面，最多记这么久
+const pages = new Map(); // 页面 id → { id, conns: Set<res>, connectedAt, reportAt, state, asleepAt }
+function pageOf(id) {
+  const key = String(id || 'legacy').slice(0, 64); // 老版本的页面不带 id，都算作 legacy
+  let p = pages.get(key);
+  if (!p) { p = { id: key, conns: new Set(), connectedAt: 0, reportAt: 0, state: null, asleepAt: 0 }; pages.set(key, p); }
+  return p;
+}
+/** 这个页面现在醒着吗：刚上报过，或者刚连上、还在加载没来得及报。说过「要睡了」的不算。 */
+const isAwake = (p, now) => !p.asleepAt && (now - p.reportAt < FRESH || (p.conns.size > 0 && now - p.connectedAt < FRESH));
+/** 房间现在的样子。kind: open 有醒着的页面 | asleep 页面还在，但被浏览器冻住了 | closed 没有页面。 */
+function roomStatus() {
+  const now = Date.now();
+  let open = null, asleep = null;
+  for (const p of pages.values()) {
+    if (isAwake(p, now)) { if (!open || p.reportAt > open.reportAt) open = p; }
+    else if (p.conns.size || (p.asleepAt && now - p.asleepAt < ASLEEP_KEEP)) { if (!asleep || p.reportAt > asleep.reportAt) asleep = p; }
+    else pages.delete(p.id); // 没连着、也没在睡：页面已经关了
+  }
+  return open ? { kind: 'open', page: open } : asleep ? { kind: 'asleep', page: asleep } : { kind: 'closed', page: null };
+}
+const CLOSED_NOTE = () => '房间页面没有打开，她现在没有身体可用（打开 http://127.0.0.1:' + config.port + ' 即可）';
+const ASLEEP_NOTE = '房间页面还开着，但浏览器让它睡着了（标签页太久没人看，比如 Edge 的睡眠标签页）：身体这会儿停着不动，指令也没人执行。这不是主人关了房间，主人点回那个标签页它就醒了。';
+const NOBODY = (st) => (st.kind === 'asleep' ? { roomAsleep: true, note: '房间页面睡着了（浏览器冻住了那个标签页），动作没人执行。主人点回房间标签页它才会醒。' } : { note: '没有打开着的房间页面，动作没人执行' });
+
 // ---------- 浏览器推送（SSE） ----------
-const clients = new Set();
 const recent = []; // 最近的聊天记录，新开页面时回放到聊天面板
+/** 推给所有连着的页面（QQ 消息、桥的状态……睡着的页面醒来后也会收到）。 */
 function broadcast(ev) {
   if (ev.type === 'qq' && !ev.hidden) {
     recent.push({ ...ev, history: true });
     if (recent.length > 40) recent.shift();
   }
   const line = `data: ${JSON.stringify(ev)}\n\n`;
-  for (const res of clients) res.write(line);
-  return clients.size;
+  let n = 0;
+  for (const p of pages.values()) for (const res of p.conns) { res.write(line); n++; }
+  return n;
+}
+/** 只推给醒着的页面（身体指令）。睡着的页面要是攒着，醒来会把几个小时前的指令一股脑做掉。返回推给了几个连接。 */
+function sendAwake(ev) {
+  const line = `data: ${JSON.stringify(ev)}\n\n`;
+  const now = Date.now();
+  let n = 0;
+  for (const p of pages.values()) if (isAwake(p, now)) for (const res of p.conns) { res.write(line); n++; }
+  return n;
 }
 
 // ---------- QQ 桥 ----------
@@ -59,9 +98,16 @@ if (config.onebot?.enabled) {
 }
 const bridgeStatus = () => (bridge ? bridge.status() : { enabled: false, connected: false });
 
-// ---------- 房间状态（由打开着的页面上报） ----------
-let roomState = null;
-let roomStateAt = 0;
+// 房间醒了 / 睡着了 / 关了，在终端里说一声，方便看出是浏览器把它冻住了
+let lastKind = 'closed';
+setInterval(() => {
+  const { kind } = roomStatus();
+  if (kind === lastKind) return;
+  lastKind = kind;
+  log(kind === 'open' ? '[房间] 页面醒着，她能动了'
+    : kind === 'asleep' ? `[房间] 页面睡着了：浏览器冻住了这个标签页（比如 Edge 的睡眠标签页），她停着不动。想让她一直醒着，把 127.0.0.1:${config.port} 加进浏览器「从不让这些站点进入睡眠状态」的名单`
+      : '[房间] 没有打开着的房间页面了');
+}, 5000).unref();
 
 // ---------- 天气 ----------
 let weatherCache = { at: 0, data: null };
@@ -235,23 +281,24 @@ const NOT_DONE_YET = '指令送到了，但身体才刚开始做，还没做完�
 // ---------- 等身体做完：/api/act 带了 wait 就先不回，等页面报「做完了 / 到位了 / 被打断了」再回 ----------
 const waiting = new Map(); // 指令 id → finish(result)
 let actSeq = 0;
-/** 发一条指令给页面，等它做完。返回要回给调用方的结果。 */
+/** 发一条指令给醒着的页面，等它做完。返回要回给调用方的结果（带上 delivered：推给了几个页面）。 */
 function actAndWait(ev, sec) {
   return new Promise((resolve) => {
     const id = `${Date.now().toString(36)}-${++actSeq}`;
+    let delivered = 0;
     const timer = setTimeout(() => finish({
       ok: true, done: false, timeout: true,
       note: `等了 ${sec} 秒还没做完，身体还在做。别说已经做好了。`,
-      doing: roomState?.doing ?? null,
+      doing: roomStatus().page?.state?.doing ?? null,
     }), sec * 1000);
     const finish = (result) => {
       if (!waiting.has(id)) return;
       waiting.delete(id); clearTimeout(timer);
-      resolve(result);
+      resolve({ delivered, ...result });
     };
     waiting.set(id, finish);
-    const delivered = broadcast({ ...ev, id, wait: true });
-    if (!delivered) finish({ ok: true, done: false, delivered: 0, note: '没有打开着的房间页面，动作没人执行' });
+    delivered = sendAwake({ ...ev, id, wait: true });
+    if (!delivered) finish({ ok: true, done: false, ...NOBODY(roomStatus()) });
   });
 }
 
@@ -307,19 +354,24 @@ const server = http.createServer(async (req, res) => {
     if (p === '/events') {
       res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', connection: 'keep-alive' });
       res.write(`data: ${JSON.stringify({ type: 'hello', name: config.character?.name ?? '大肥鱼', bridge: bridgeStatus(), recent, music: { enabled: config.music?.enabled !== false, auto: config.music?.auto !== false, playlist: config.music?.playlist || '大肥鱼的歌单' } })}\n\n`);
-      clients.add(res);
+      const pg = pageOf(url.searchParams.get('page'));
+      pg.conns.add(res); pg.connectedAt = Date.now(); pg.asleepAt = 0; // 能连上来，说明它醒着
       const ping = setInterval(() => res.write(': ping\n\n'), 20000);
-      req.on('close', () => { clearInterval(ping); clients.delete(res); });
+      req.on('close', () => { clearInterval(ping); pg.conns.delete(res); });
       return;
     }
     if (p === '/api/state' && req.method === 'GET') {
-      const fresh = roomState && Date.now() - roomStateAt < 20000;
-      json(res, 200, {
-        roomOpen: Boolean(fresh),
-        note: fresh ? undefined : '房间页面没有打开，她现在没有身体可用（打开 http://127.0.0.1:' + config.port + ' 即可）',
-        state: fresh ? roomState : null,
-        qq: bridgeStatus(),
-      });
+      const st = roomStatus();
+      const now = Date.now();
+      if (st.kind === 'open' && st.page.state) json(res, 200, { roomOpen: true, state: st.page.state, qq: bridgeStatus() });
+      else if (st.kind === 'asleep') {
+        json(res, 200, {
+          roomOpen: false, roomAsleep: true, note: ASLEEP_NOTE,
+          asleepMin: st.page.reportAt ? Math.round((now - st.page.reportAt) / 60000) : null, // 睡了大约几分钟
+          lastDoing: st.page.state?.doing ?? null, // 睡着之前身体在干什么
+          state: null, qq: bridgeStatus(),
+        });
+      } else json(res, 200, { roomOpen: false, note: st.kind === 'open' ? '房间页面刚打开，还在加载，过几秒再看' : CLOSED_NOTE(), state: null, qq: bridgeStatus() });
       return;
     }
     if (p === '/api/actions' && req.method === 'GET') { json(res, 200, { actions: ACTIONS }); return; }
@@ -358,8 +410,19 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (p === '/api/report' && req.method === 'POST') {
-      roomState = await readBody(req);
-      roomStateAt = Date.now();
+      const pg = pageOf(url.searchParams.get('page'));
+      pg.state = await readBody(req);
+      pg.reportAt = Date.now();
+      pg.asleepAt = 0; // 还能上报，说明醒着（刚从睡眠里回来的也是）
+      json(res, 200, { ok: true });
+      return;
+    }
+    if (p === '/api/lifecycle' && req.method === 'POST') {
+      // 页面在被浏览器冻住（freeze）或关掉（close）之前，用 sendBeacon 打个招呼
+      const ev = url.searchParams.get('event');
+      const id = url.searchParams.get('page');
+      if (ev === 'freeze') pageOf(id).asleepAt = Date.now();
+      else if (ev === 'close' && id) pages.delete(String(id).slice(0, 64));
       json(res, 200, { ok: true });
       return;
     }
@@ -368,6 +431,12 @@ const server = http.createServer(async (req, res) => {
       const action = String(body.action ?? '').trim();
       if (!Object.hasOwn(ACTIONS, action)) {
         json(res, 400, { ok: false, error: `不认识的动作「${action}」`, actions: Object.keys(ACTIONS) });
+        return;
+      }
+      const st = roomStatus();
+      if (st.kind !== 'open') { // 页面睡着了或者没开：别把指令攒给它，直接告诉调用方
+        log(`[act] ${action} → 没人执行（房间${st.kind === 'asleep' ? '睡着了' : '没开'}）`);
+        json(res, 200, { ok: true, delivered: 0, done: false, ...NOBODY(st) });
         return;
       }
       let video = null;
@@ -386,20 +455,22 @@ const server = http.createServer(async (req, res) => {
         log(`[act] ${what}（等做完，最多 ${sec} 秒）`);
         const result = await actAndWait(ev, sec);
         log(`[act] ${what} → ${result.done ? '做完了' : result.timeout ? '超时' : result.cancelled ? '被打断' : '没做成'}，用了 ${((Date.now() - t0) / 1000).toFixed(1)} 秒${gone ? '（调用方已经不等了）' : ''}`);
-        if (!gone) json(res, 200, { delivered: clients.size, ...result });
+        if (!gone) json(res, 200, result);
         return;
       }
-      const delivered = broadcast(ev);
+      const delivered = sendAwake(ev);
       log(`[act] ${what} → ${delivered} 个页面`);
       json(res, 200, delivered
         ? { ok: true, delivered, ...(INSTANT.has(action) ? {} : { done: false, note: NOT_DONE_YET }) }
-        : { ok: true, delivered, done: false, note: '没有打开着的房间页面，动作没人执行' });
+        : { ok: true, delivered, done: false, ...NOBODY(roomStatus()) });
       return;
     }
     if (p === '/api/read-wait' && req.method === 'GET') {
-      // QQ 插件在发她写好的回复之前来问：她把你的消息看完了没？看完了（或者房间没开）才回，最多等 timeout 秒。
+      // QQ 插件在发她写好的回复之前来问：她把你的消息看完了没？看完了才回，最多等 timeout 秒。
       // 这样她总是先跑去拿起手机、看完你说了什么，回复才发到你 QQ 上。
-      if (!clients.size) { json(res, 200, { ready: true, roomOpen: false }); return; }
+      // 房间没开、或者页面睡着了（身体不会动，等也白等），就立刻放行。
+      const st = roomStatus();
+      if (st.kind !== 'open') { json(res, 200, { ready: true, roomOpen: false, ...(st.kind === 'asleep' ? { roomAsleep: true } : {}) }); return; }
       const sec = Math.min(Math.max(Number(url.searchParams.get('timeout')) || 25, 1), 60);
       const t0 = Date.now();
       const r = await actAndWait({ type: 'readwait', at: t0 }, sec);
