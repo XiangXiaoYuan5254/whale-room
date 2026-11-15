@@ -66,6 +66,18 @@
   button.b.on { background: rgba(111,182,255,.22); border-color: rgba(111,182,255,.5); }
   button.b.warm.on { background: rgba(255,201,138,.22); border-color: rgba(255,201,138,.55); color: var(--warm); }
   button.b:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* 底部按钮可以收起来，只留一个「展开」 */
+  #dock-toggle { pointer-events: auto; font: inherit; color: var(--dim); cursor: pointer; padding: 0 12px; display: flex; align-items: center; gap: 5px; }
+  #dock-toggle:hover { color: var(--text); }
+  #dock-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  #dock-toggle svg { width: 12px; height: 12px; transition: transform .2s; }
+  #dock.collapsed #dock-toggle { padding: 7px 14px; }
+  #dock.collapsed #dock-toggle svg { transform: rotate(180deg); }
+  #dock.collapsed > .group { display: none; }
+  #dock:not(.collapsed) > .group { animation: dock-in .22s ease-out; }
+  @keyframes dock-in { from { opacity: 0; transform: translateY(10px); } }
+  @media (prefers-reduced-motion: reduce) { #dock > .group { animation: none; } }
+  body.dock-collapsed #chat { bottom: 58px; }
 
   .bubble { position: absolute; left: 0; top: 0; transform: translate(-50%, -100%); max-width: min(300px, 60vw); padding: 9px 13px; border-radius: 16px; background: rgba(255,255,255,.96); color: #1b2550; line-height: 1.5; font-size: 14px; box-shadow: 0 6px 24px rgba(0,0,20,.35); opacity: 0; transition: opacity .2s; white-space: pre-wrap; word-break: break-word; will-change: transform; }
   .bubble::after { content: ""; position: absolute; left: 50%; bottom: -7px; width: 14px; height: 14px; background: inherit; transform: translateX(-50%) rotate(45deg); border-radius: 3px; }
@@ -101,6 +113,7 @@
   <div class="chip glass" id="chip-time">--:--</div>
   <div class="chip glass" id="chip-weather">—</div>
   <div class="chip glass" id="chip-qq"><i class="dot"></i><span>QQ 未连接</span></div>
+  <div class="chip glass" id="chip-mood" hidden></div>
   <div class="chip glass" id="chip-doing">正在醒来…</div>
   <div class="chip glass" id="chip-music" hidden></div>
 </div>
@@ -161,6 +174,9 @@
     <button class="b" id="btn-follow">镜头跟随</button>
     <button class="b" id="btn-reset" title="滚轮：往鼠标指的地方缩放；右键拖动或按住 Shift 拖动：平移；点这里回到默认视角">镜头复位</button>
   </div>
+  <button id="dock-toggle" class="glass" aria-controls="dock" aria-expanded="true" title="收起底部按钮">
+    <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>收起</span>
+  </button>
 </div>
 
 <div id="flash"></div>

@@ -29,6 +29,10 @@
   "photo": {
     "sendToQQ": true
   },
+  "mood": {
+    "enabled": true,
+    "dir": ""
+  },
   "app": {
     "keepAwake": true
   }

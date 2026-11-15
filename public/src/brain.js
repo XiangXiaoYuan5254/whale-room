@@ -25,6 +25,8 @@ const TOP_Y = { floor: 0.006, bed: 0.46, desk: 0.74, sill: 0.9705 };
 const STAY = new Set(['computer', 'bedSit', 'bedLie', 'lieRug', 'sitHere', 'window', 'hide', 'hold', 'idle']);
 /** 要待一阵、或者走过去就停在那儿的事：做到位了就算做完，不用再回去拿手机（手机要么带在身边，要么她正忙着）。其余的是跑一趟就完的事。 */
 const STAYS = new Set([...STAY, 'phone', 'read', 'sleep', 'eat', 'goto']);
+/** 正做着这些事时要回消息：放下手头的去拿手机，回完再接着做（吃到一半的饭、窗边、电脑前……）。 */
+const RESUME = new Set(['computer', 'bedSit', 'bedLie', 'lieRug', 'sitHere', 'window', 'hide', 'phone', 'read', 'eat']);
 const UP = new THREE.Vector3(0, 1, 0), X = new THREE.Vector3(1, 0, 0), Z = new THREE.Vector3(0, 0, 1);
 const _q = new THREE.Quaternion(), _v = new THREE.Vector3();
 /** 书拿在手里时相对胸口的朝向：转半圈让书页对着她，再仰到书页朝上、往她脸那边斜 0.45 弧度。 */
@@ -121,11 +123,13 @@ export class Brain {
     this.queue = [{ name: 'greet', fn: (tk) => this.a_greet(tk) }];
     this.recent = [];
     this.mood = 0.2;
+    this.feel = null; // 她真正的心情（DSH 插件「鱼的心情」记的）：{ value 0–100, label, dims, top, reason, updatedAt }。this.mood 会慢慢往它靠
     this.hold = false;
     this.token = null;
     // commanded：她的 AI 本体这一轮已经用接口亲自指挥过身体了，她回复里的「我去……」就不再当指令（不然会做两遍）
-    // readUntil：她把手上这条消息看完的时间；readWaiters：等她看完消息才发出去的回复（见 whenRead）
-    this.chat = { inbox: [], intent: null, ownerIntent: null, commanded: false, order: null, readUntil: 0, readWaiters: [], linger: 14, replyTimeout: 90 };
+    // readUntil：她把手上这条消息看完的时间；readWaiters：等她拿起手机、看完消息才发出去的回复（见 whenRead）
+    // replyAfter：要发消息了，但手上被指挥去做的事还没到位，到位了再去拿手机；resume：为了回消息放下的事，回完接着做
+    this.chat = { inbox: [], intent: null, ownerIntent: null, commanded: false, order: null, readUntil: 0, readWaiters: [], replyAfter: false, resume: null, linger: 14, replyTimeout: 90 };
     this.before = null; // 手机响之前她在干什么（「在地毯上踢球」），聊天时报给她的 AI 本体，主人问「在干嘛」才答得上来
     this.cur = null; // 正在做的那件事（{ name, fn, forced, commanded, onDone, result }）
     this.chatting = false;
@@ -139,6 +143,7 @@ export class Brain {
     this.pot = 0; this.potTarget = 0; // 勺子伸进锅里舀饭的程度
     this.mealPending = null; // 正在吃（或吃到一半搁下）的那一顿
     this.video = null; // 聊天里分享的 B 站视频（等着去电脑上看）
+    this.browseUntil = 0; // 上网冲浪时，这一页看到什么时候
     this.musicCfg = { enabled: true, auto: true, playlist: '大肥鱼的歌单' }; // 服务端 config.json 里的 music
     this.musicUntil = 0; this.nextMusicAt = 10 * 60; // 这次放到什么时候；下次最早什么时候再自己去放
     this.capture = null; // (kind, pose) => Promise：由 main.js 提供，真的把画面拍下来并交给服务端
@@ -168,7 +173,7 @@ export class Brain {
   setDoing(text) { if (this.doing !== text) { this.doing = text; this.ui.setDoing(text); } }
   pose(base, posture, params = {}) { this.anim.setBase(base, params); this.posture = posture; }
   camYaw() { return Math.atan2(this.camera.position.x - this.actor.pos.x, this.camera.position.z - this.actor.pos.z); }
-  act(name, ...args) { return { name, fn: (tk) => this['a_' + name](tk, ...args) }; }
+  act(name, ...args) { return { name, args, fn: (tk) => this['a_' + name](tk, ...args) }; }
 
   /** 把一件指令的结果报给在等它的人（接口带了 wait 时是服务端，在等的是她的 AI 本体）。每件事只报一次。 */
   orderDone(act, result) {
@@ -181,7 +186,12 @@ export class Brain {
    * 当前这件事「到位」了：一次性的事（拍照、浇花、跳舞……）是做完了；要待一阵的事（看窗外、玩电脑、看书、睡觉……）是已经待下了。
    * name 写的是调用它的那个活动自己的名字：被别的活动顺带调用时（比如睡前顺手关音乐）不算数。
    */
-  arrived(name) { if (this.cur && this.cur.name === name) this.orderDone(this.cur, { ok: true, done: true }); }
+  arrived(name) {
+    if (!this.cur || this.cur.name !== name) return;
+    this.cur.settled = true;
+    this.orderDone(this.cur, { ok: true, done: true });
+    if (this.chat.replyAfter) { this.chat.replyAfter = false; this.clock.sleep(0.4).then(() => this.replyOnPhone()).catch(() => {}); }
+  }
 
   /** 不打断当前活动的小反应：换个表情、做个小动作、冒个符号，过一会儿表情复原。 */
   react(faceName, gesture, emote, sec = 2) {
@@ -494,7 +504,7 @@ export class Brain {
     this.actor.spin = 0; this.pour = 0;
     for (const d of this.drops) d.visible = false;
     ui.think(false);
-    if (name === 'computer') { room.laptop.set(false); room.laptop.screen.clearVideo(); }
+    if (name === 'computer') { room.laptop.set(false); room.laptop.screen.clearVideo(); room.laptop.screen.clearPage(); }
     if (this.posture !== 'sleep') room.quilt.throwOff();
     this.leftCushion();
   }
@@ -502,6 +512,7 @@ export class Brain {
   // ---------------- 主循环 ----------------
   async run() {
     for (;;) {
+      if (this.chat.replyAfter && !this.queue.some((q) => q.name === 'chat') && this.replyPending()) { this.chat.replyAfter = false; this.queue.unshift(this.act('chat', true)); }
       const act = this.queue.shift() ?? this.pickAuto();
       this.token = new Token(); this.current = act.name; this.cur = act;
       this.ui.setAuto(!act.forced && !this.hold);
@@ -547,7 +558,14 @@ export class Brain {
     return m ? d.toDateString() + ' ' + m : null;
   }
 
-  nightHours() { const h = this.env.state.hour; return this.env.timeMode === 'auto' && h >= 1 && h < 7.4; }
+  /** 该不该睡：装了 dsh-jingjing 就按它定的作息（服务端推过来的 life），没有就用房间自己的深夜 1:00–7:24。 */
+  nightHours() {
+    if (this.env.timeMode !== 'auto') return false;
+    if (this.life) return this.life.asleep;
+    const h = this.env.state.hour;
+    return h >= 1 && h < 7.4;
+  }
+  onLife(l) { this.life = l && typeof l.asleep === 'boolean' ? l : null; }
   shouldSleep() { return this.clock.now < this.sleepWantedUntil || (this.nightHours() && this.clock.now > (this.awakeUntil ?? 0)); }
 
   pickAuto() {
@@ -574,6 +592,7 @@ export class Brain {
       spear: this.spear.at === 'floor' ? 1.2 : e.dark < 0.6 && e.hour >= 8 && e.hour < 22 ? 0.4 + Math.max(0, this.mood) * 0.2 : 0,
       box: e.dark < 0.6 && e.hour >= 8 && e.hour < 22 ? 0.35 + Math.max(0, this.mood) * 0.2 : 0,
     };
+    this.moodWeights(w);
     let total = 0;
     for (const k of Object.keys(w)) {
       const idx = this.recent.lastIndexOf(k);
@@ -586,6 +605,48 @@ export class Brain {
       if (r <= 0) return k === 'spear' && this.spear.at === 'floor' && e.dark >= 0.6 ? this.act('spear', 'tidy') : this.act(k);
     }
     return this.act('idle');
+  }
+
+  // ---------------- 心情 ----------------
+  /** 她真正的心情换算成 -1~0.8：基线 70 附近是 0，90 以上是开心得蹦蹦跳跳，40 以下很低落。 */
+  feelBase() {
+    return this.feel ? clamp((this.feel.value - 70) / 30, -1, 0.8) : 0;
+  }
+  /** 心情影响她自己想做什么：难过时多去窗边、多躺着，惦记主人时老去看手机，开心时爱跳舞、跑来打招呼，生气了去打拳出出气。 */
+  moodWeights(w) {
+    const f = this.feel;
+    if (!f) return;
+    const d = f.dims ?? {}, v = f.value;
+    const low = v < 45 || (d.sad ?? 0) >= 25 || (d.heartache ?? 0) >= 30;
+    const high = v >= 80 || (d.happy ?? 0) >= 30 || (d.sweet ?? 0) >= 30;
+    if (low) { w.window += 1.2; w.bedLie += 0.8; w.hide += 0.25; w.dance *= 0.25; w.play *= 0.4; w.greet *= 0.4; w.wander *= 0.6; }
+    if (!low && high) { w.dance += 0.6; w.greet += 0.5; w.play += 0.3; }
+    if ((d.worry ?? 0) >= 25 || (d.jealous ?? 0) >= 25 || (d.miss ?? 0) >= 25) w.phone += 1.0;
+    if ((d.angry ?? 0) >= 25 && w.box > 0) w.box += 1.2;
+    if ((d.calm ?? 0) >= 30) { w.read += 0.5; w.window += 0.3; }
+  }
+  /** 发呆、溜达时的表情。 */
+  restFace() {
+    const f = this.feel;
+    if (!f) return 'neutral';
+    const top = f.top?.[0]?.key;
+    if (f.value < 42 || top === 'sad' || top === 'heartache') return 'sad';
+    if (top === 'worry') return 'think';
+    if (f.value >= 80 || top === 'happy' || top === 'sweet') return 'smile';
+    return 'neutral';
+  }
+  /** 心情变了（本地服务推过来的）。刚判出来的新变化：脸上带一下，头顶冒个符号，把心里那句话冒成云朵。 */
+  onMood(m) {
+    const prev = this.feel;
+    this.feel = m && Number.isFinite(m.value) ? m : null;
+    this.ui.setMood(this.feel);
+    if (!this.feel || !prev || this.feel.updatedAt === prev.updatedAt || this.feel.kind === 'decay') return;
+    if (this.posture === 'sleep' || this.current === 'sleep') return; // 睡着了（或者正要睡）：醒来自然是新的心情，不用演
+    const up = this.feel.value >= prev.value;
+    const LOOK = { happy: ['happy', '♪'], sweet: ['love', '💗'], calm: ['smile', null], heartache: ['sad', '💧'], worry: ['think', '💦'], sad: ['sad', '💧'], jealous: ['angry', '💢'], angry: ['angry', '💢'] };
+    const [faceName, emote] = LOOK[this.feel.top?.[0]?.key] ?? (up ? ['happy', '♪'] : ['sad', '💧']);
+    this.react(faceName, up && chance(0.5) ? 'bounce' : null, emote, 3);
+    if (this.feel.reason && this.feel.confidence >= 60) this.clock.sleep(1.5).then(() => this.think(this.feel?.reason ?? ''));
   }
 
   // ---------------- 活动 ----------------
@@ -603,16 +664,16 @@ export class Brain {
     for (let i = 0; i < 1 + Math.floor(rand(2.5)); i++) {
       const r = Math.random();
       if (r < 0.3) await this.g('lookAround', tk);
-      else if (r < 0.5) { this.anim.lookAt(this.camera.position); this.face('smile'); await this.sleep(rand(1.5, 3), tk); this.anim.lookAt(null); this.face('neutral'); }
+      else if (r < 0.5) { this.anim.lookAt(this.camera.position); this.face(this.restFace() === 'sad' ? 'sad' : 'smile'); await this.sleep(rand(1.5, 3), tk); this.anim.lookAt(null); this.face(this.restFace()); }
       else if (r < 0.65) await this.g('tilt', tk);
-      else if (r < 0.8) { this.face('sleepy'); await this.g('yawn', tk); this.face('neutral'); }
+      else if (r < 0.8) { this.face('sleepy'); await this.g('yawn', tk); this.face(this.restFace()); }
       else await this.sleep(rand(1.5, 4), tk);
     }
   }
 
   async a_wander(tk) {
     this.setDoing('在房间里溜达');
-    this.face('neutral');
+    this.face(this.restFace());
     for (let i = 0; i < 1 + Math.floor(rand(3)); i++) {
       await this.go(this.nav.randomFloorPoint(), tk, chance(0.2) ? 'skip' : 'walk');
       if (chance(0.5)) await this.g('lookAround', tk); else await this.sleep(rand(0.8, 2.5), tk);
@@ -793,10 +854,12 @@ export class Brain {
 
   /**
    * 玩电脑。给了 video（聊天里分享的 B 站视频，或者她自己要看的）就专心看它：屏幕上是它的封面、标题和进度；
-   * 没给就随便刷刷、偶尔敲敲键盘。
+   * 给了 page（她的 AI 本体在上网冲浪，看到哪一页就报过来）就看那一页，后面报来的新一页直接换上；
+   * 都没给就随便刷刷、偶尔敲敲键盘。
    */
-  async a_computer(tk, video = null) {
+  async a_computer(tk, video = null, page = null) {
     const scr = this.room.laptop.screen;
+    if (page) return this.browse(tk, page);
     this.setDoing(video ? `去电脑上看《${shortTitle(video.title)}》` : '想去玩电脑');
     await this.go(PLACES.computer, tk);
     await this.settlePhone(tk); // 手机搁在笔记本旁边的桌面上，回消息时伸手就能拿
@@ -830,6 +893,38 @@ export class Brain {
       else if (r < 0.65) { this.anim.setArms('auto'); this.anim.gesture('swipe'); scr.swipeNow(); await this.sleep(rand(1.5, 3.5), tk); }
       else { this.anim.setArms('type'); this.face('focus'); await this.sleep(rand(2, 5), tk); this.face('smile'); }
     }
+  }
+
+  /** 上网冲浪：坐到电脑前看这一页。看的时候又报来新的一页（order 里的 browse），就地换上、再多待一会儿。 */
+  async browse(tk, page) {
+    const scr = this.room.laptop.screen;
+    const act = this.cur;
+    this.setDoing(`去电脑上看${page.site}`);
+    await this.go(PLACES.computer, tk);
+    await this.settlePhone(tk);
+    this.pose('kneel', 'sit');
+    this.room.laptop.set(true);
+    this.face('focus');
+    this.anim.lookAt(new THREE.Vector3(1.12, 0.9, -1.6));
+    if (act) act.browsing = true;
+    this.showPage(page);
+    this.arrived('computer');
+    while (this.clock.now < this.browseUntil) {
+      await this.sleep(rand(4, 9), tk);
+      const r = Math.random();
+      if (r < 0.25) this.react(pick(['think', 'surprise', 'smile', 'happy']), chance(0.3) ? 'tilt' : null, chance(0.3) ? pick(['💭', '❗', '❓']) : null, 2.2);
+      else if (r < 0.45) { this.anim.setArms('type'); this.face('focus'); await this.sleep(rand(1.5, 3.5), tk); this.anim.setArms('auto'); this.face('smile'); }
+    }
+    if (act) act.browsing = false;
+    scr.clearPage();
+    this.setDoing('上完网了');
+    this.face('smile'); await this.sleep(1, tk);
+  }
+  /** 屏幕换成这一页，再多看两分半。 */
+  showPage(page) {
+    this.room.laptop.screen.showPage(page);
+    this.browseUntil = this.clock.now + 150;
+    this.setDoing(`在电脑上看${page.site}：《${shortTitle(page.title || '网页')}》`);
   }
 
   /**
@@ -1575,13 +1670,13 @@ export class Brain {
         this.pose('sitFloor', 'sit'); this.face('sleepy'); ui.emote('❓', 1.6);
         this.setDoing('被手机消息吵醒了');
         await this.g('rubEyes', tk);
-      } else if (ph.state !== 'held') {
+      } else if (ph.state !== 'held' && !replying) {
         ui.emote('❗', 1.2); this.face('surprise');
         anim.lookAt(ph.worldPos());
         if (this.posture === 'stand') { anim.setBase('stand'); await this.g('surprise', tk); } else await this.sleep(0.5, tk);
       }
       if (ph.state !== 'held') {
-        this.setDoing('手机响了，过去拿');
+        this.setDoing(replying ? '去拿手机回你消息' : '手机响了，过去拿');
         await this.fetchPhone(tk, 'chat', 'run');
         // 拿到了：转过来坐好（在床沿就把腿垂下去）
         this.pose('stand', 'stand'); await this.sleep(0.3, tk);
@@ -1656,10 +1751,17 @@ export class Brain {
     }
     this.awakeUntil = this.clock.now + 40; // 聊完别立刻倒头就睡
     const order = c.order; c.order = null;
+    const resume = c.resume; c.resume = null;
     if (order) { c.intent = null; c.ownerIntent = null; this.queue.unshift(order); return; } // 照她亲自下的指令去做，不再从话里猜
     const it = c.intent; c.intent = null; c.ownerIntent = null;
     this.face('smile');
-    if (it) { const a = this.intentAct(it); if (a) { a.forced = true; this.queue.unshift(a); } }
+    const next = it ? this.intentAct(it) : null;
+    if (next) { next.forced = true; this.queue.unshift(next); }
+    else if (resume) { // 回完消息，接着做刚才放下的事（饭接着吃、回窗边……）
+      const a = this.act(resume.name, ...resume.args);
+      a.commanded = resume.commanded; a.forced = resume.commanded;
+      this.queue.unshift(a);
+    }
   }
   /**
    * 做完一件她亲自下的、跑一趟就完的事（关音响、开灯、浇花……）以后，回去把手机拿起来，拿到了才算做完：
@@ -1709,38 +1811,42 @@ export class Brain {
     if (ev.dir === 'out' && MONOLOGUE.test(ev.text ?? '')) { this.think(ev.text); return; } // 她的内心独白：只冒个心里话气泡，不当成聊天
     if (!ev.hidden) this.ui.addChat(ev);
     if (ev.dir === 'in' && !ev.hidden) this.chat.commanded = false; // 主人说了新的话：她回这一句时说的「我去……」又算数了
-    // 正在做被指挥去做的事（她的 AI 本体用接口叫的，或者你点的）：她的回复边做边说，不去打断它。
-    // 以前这里会掏手机打字，把刚叫她去拍的照片、去的窗边半路取消掉。
-    // （做完回来正要拿起手机回你的那一下除外：那句回复留给手机上打出来）
-    if (ev.dir === 'out' && !this.chatting && !this.queue.some((q) => q.name === 'chat') && this.onOrders()) { this.sayInline(ev); return; }
+    // 她发出去的话一律在手机上打出来。一般 QQ 插件会先等她拿起手机才发（见 whenRead），
+    // 走到这里的是没等到的（等太久超时了，或者别的路子直接发的）：先进收件箱，拿起手机再「打」出来。
+    // 手上被指挥去做的事还没到位（正拍着照、正往窗边走）就等到位了再拿，不把它半路取消掉。
+    if (ev.dir === 'out' && !this.chatting && !this.queue.some((q) => q.name === 'chat')) { this.chat.inbox.push(ev); this.replyOnPhone(); return; }
     this.chat.inbox.push(ev);
     if (ev.dir === 'in') this.phone.ring(ev.hidden ? '你有一条新消息' : ev.text || (ev.sticker ? '[动画表情]' : '[消息]'));
     if (!this.chatting && !this.queue.some((q) => q.name === 'chat')) this.interrupt(this.act('chat'));
   }
   /**
-   * 等她把手机上你发来的消息看完再调用 cb（手机响了还没拿到、或者正在看）；没有要看的就马上调用。
-   * 她的 AI 本体写好的回复由 QQ 插件拦着，等这一刻才发出去：先看完你说了什么，再回你。
+   * 她的 AI 本体写好了要发的话（回你，或者自己找你说），QQ 插件拦着，问房间：现在能发了吗？
+   * 能发 = 手机拿在她手里、你发来的都看完了。没拿着手机就先去拿：在吃饭就把碗搁下去拿，回完接着吃；
+   * 手上被指挥去做的事还没到位，就等到位了再拿。拿到了才调用 cb，QQ 那边这时才发出去，房间里她正好在手机上打字。
    */
   whenRead(cb) {
     const c = this.chat;
-    const onPhone = this.chatting || this.queue.some((q) => q.name === 'chat');
-    const unread = onPhone && (c.inbox.some((e) => e.dir === 'in') || this.clock.now < c.readUntil);
-    if (unread) c.readWaiters.push(cb); else cb();
+    if (this.chatting || this.queue.some((q) => q.name === 'chat')) {
+      const ready = this.chatting && this.phone.state === 'held' && !c.inbox.some((e) => e.dir === 'in') && this.clock.now >= c.readUntil;
+      if (ready) cb(); else c.readWaiters.push(cb); // 正在拿手机 / 正在看：看完了聊天那边会放行
+      return;
+    }
+    c.readWaiters.push(cb);
+    this.replyOnPhone();
   }
   flushRead() { for (const f of this.chat.readWaiters.splice(0)) f(); }
-  /** 手头的事（或排着队马上要做的事）是被指挥去做的。 */
-  onOrders() { return Boolean(this.cur?.commanded) || this.queue.some((q) => q.commanded); }
-  /** 她发出去的一句话，不停下手头的事：头顶冒字、嘴动、表情跟着语气变一下。 */
-  sayInline(ev) {
-    const text = ev.text || (ev.sticker ? '[动画表情]' : '…');
-    const dur = clamp(1.8 + text.length * 0.13, 2.4, 11);
-    this.ui.speech(text, dur);
-    this.phone.push(true, text);
-    if (this.posture === 'sleep') return; // 已经睡着了：只冒字（像说梦话），不换表情、不动嘴
-    this.char.face.speak(clamp(text.length * 0.11 + 0.4, 0.8, dur * 0.8));
-    const m = moodOf(text);
-    this.react(m.face, null, ev.sticker ? '✨' : m.emote, Math.min(dur, 4));
-    this.mood = clamp(this.mood + m.dm, -1, 1); this.anim.finMood = this.mood;
+  /** 有等着发的话（插件拦着的回复，或者已经发出去、房间还没「打」出来的）。 */
+  replyPending() { return this.chat.readWaiters.length > 0 || this.chat.inbox.some((e) => e.dir === 'out'); }
+  /**
+   * 要发消息了：拿起手机。被指挥去做的事还没到位的先不动（到位了 arrived 会叫这里；跑一趟就完的事做完会自己回去拿手机）。
+   * 正在做、回完值得接着做的事（吃饭、窗边、电脑……）记下来，聊完接着做。
+   */
+  replyOnPhone() {
+    const c = this.chat, cur = this.cur;
+    if (!this.replyPending() || this.chatting || this.queue.some((q) => q.name === 'chat')) return;
+    if (cur?.commanded && !cur.settled && cur.name !== 'chat') { c.replyAfter = true; return; }
+    c.resume = cur && RESUME.has(cur.name) ? { name: cur.name, args: cur.args ?? [], commanded: Boolean(cur.commanded) } : null;
+    this.interrupt(this.act('chat', true));
   }
   /** 聊天里分享了一个 B 站视频（服务端查到标题和封面后发来）：聊完就去电脑上看它。 */
   onVideo(ev) {
@@ -1800,7 +1906,7 @@ export class Brain {
     this.interrupt(act, true);
   }
   /** 执行一条指令。mark(act)：给要去做的那件事打上「是被指挥的」记号（见 command）。 */
-  order({ action, target = null, text = null, video = null }, mark) {
+  order({ action, target = null, text = null, video = null, page = null }, mark) {
     const force = (a) => { this.hold = false; this.sleepWantedUntil = 0; this.awakeUntil = this.clock.now + 60; this.dispatch(mark(a)); };
     switch (action) {
       case 'auto': this.hold = false; this.sleepWantedUntil = 0; this.ui.setAuto(true); if (this.current === 'hold') this.token?.cancel(); return true;
@@ -1831,6 +1937,13 @@ export class Brain {
       case 'phone': force(this.act('phone')); return true;
       case 'eat': force(this.act('eat')); return true;
       case 'watch': force(this.act('computer', video)); return true;
+      case 'browse': {
+        const p = page && typeof page === 'object' ? page : { site: target ? String(target) : '网页', title: text ? String(text) : '' };
+        if (!p.title && !p.site) return false;
+        // 已经坐在电脑前上网了：直接换一页，不用重新走过去
+        if (this.current === 'computer' && this.cur?.browsing) { this.showPage(p); return true; }
+        force(this.act('computer', null, p)); return true;
+      }
       case 'photo': force(this.act('photo', PHOTO_SUBJECTS.includes(target) ? target : (target && photoWhatOf(String(target))) || 'selfie')); return true;
       case 'music': force(this.act('music', ['on', 'off', 'next'].includes(target) ? target : 'toggle')); return true;
       case 'think': if (text) this.think(text); return true;
@@ -1870,7 +1983,10 @@ export class Brain {
 
   // ---------------- 每帧 ----------------
   update(dt) {
-    this.mood *= Math.exp(-dt / 600);
+    // 摸摸头、聊开心了带来的那点高兴会慢慢散掉，回到她真正的心情（没有心情插件时回到 0）
+    const base = this.feelBase();
+    this.mood = base + (this.mood - base) * Math.exp(-dt / 600);
+    this.anim.finMood += (this.mood - this.anim.finMood) * (1 - Math.exp(-dt / 20)); // 鱼鳍耳跟着心情慢慢立起来 / 耷拉下去
     // 勺子：碗里 ↔ 嘴边、碗里 ↔ 锅里
     this.bite += (this.biteTarget - this.bite) * (1 - Math.exp(-dt * 7));
     this.pot += (this.potTarget - this.pot) * (1 - Math.exp(-dt * 8));
@@ -1928,10 +2044,10 @@ export class Brain {
       before: this.current === 'chat' ? this.before : null, // 在看手机、聊天时：手机响之前她在哪儿、干什么
       ballAt: this.placeName('floor', this.ball.pos), // 小球只在地板上滚（上不了床和桌子）
       position: { x: +this.actor.pos.x.toFixed(2), z: +this.actor.pos.z.toFixed(2) },
-      mood: +this.mood.toFixed(2), expression: this.char.face.expr, chatting: this.chatting, freeRoam: !this.hold,
+      mood: +this.mood.toFixed(2), feeling: this.feel ? `${this.feel.label}（${this.feel.value}）${this.feel.top?.length ? '，' + this.feel.top.map((t) => t.label).join('、') : ''}` : null, expression: this.char.face.expr, chatting: this.chatting, freeRoam: !this.hold,
       roomTime: `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`, dayPhase: e.phase, weather: e.weather,
       spearAt: { home: '插在枪架上', hand: '手里', floor: '横放在地上' }[this.spear.at],
-      lampOn: this.room.lamp.on, laptopOn: this.room.laptop.on, watching: this.room.laptop.screen.video?.title ?? null, musicOn: this.speaker.playing,
+      lampOn: this.room.lamp.on, laptopOn: this.room.laptop.on, watching: this.room.laptop.screen.video?.title ?? null, browsing: this.room.laptop.screen.page ? `${this.room.laptop.screen.page.site}《${this.room.laptop.screen.page.title}》` : null, musicOn: this.speaker.playing,
       phoneAt: this.phone.state === 'held' ? '手里' : { home: '枕头边', pillow: '靠在枕头上', flat: { floor: '地上', bed: '床上', desk: '书桌上', sill: '窗台上' }[this.phone.rest.surface] ?? '身边' }[this.phone.rest.kind],
     };
   }

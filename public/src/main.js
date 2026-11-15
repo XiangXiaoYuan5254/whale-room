@@ -160,11 +160,15 @@ function connect() {
       case 'hello':
         ui.setName(ev.name); ui.setBridge(ev.bridge);
         if (ev.music) brain.musicCfg = ev.music;
+        brain.onMood(ev.mood ?? null);
+        brain.onLife(ev.life ?? null);
         if (!greeted) { greeted = true; for (const old of ev.recent ?? []) ui.addChat(old); }
         break;
       case 'bridge': ui.setBridge(ev.status); break;
       case 'qq': brain.onQQ(ev); break;
       case 'video': brain.onVideo(ev); break;
+      case 'mood': brain.onMood(ev.mood ?? null); break;
+      case 'life': brain.onLife(ev.life ?? null); break;
       case 'poke': brain.onPoke(); break;
       case 'typing': brain.onOwnerTyping(); break;
       case 'act': brain.command(ev, ev.wait ? (result) => reportAct(ev.id, result) : null, true); break;

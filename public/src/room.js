@@ -188,7 +188,60 @@ class LaptopScreen {
     this.t = 0; this.acc = 0;
     this.cur = this.#video(); this.next = null; this.swipe = 0; this.left = 5;
     this.video = null; // 正在看的那个 B 站视频：{ title, owner, duration, img, t }
+    this.page = null; // 正在看的网页（她上网冲浪时）：{ site, title, excerpt, t }
     this.#draw();
+  }
+  /**
+   * 屏幕上换成一张网页：顶上是网站的颜色条和名字，下面是标题和正文开头，正文会慢慢往下滚，像在读。
+   * 只画她的冲浪工具报过来的标题和摘要，不是真的打开了那个网页。
+   * @param p { site: 网站名（牛客 / 小红书 / 新闻源）, title, excerpt（正文开头，可以没有） }
+   */
+  showPage(p) {
+    this.page = { site: String(p.site || '网页').slice(0, 20), title: String(p.title || '').slice(0, 120), excerpt: String(p.excerpt || '').replace(/\s+/g, ' ').slice(0, 240), t: 0 };
+    this.#draw();
+  }
+  clearPage() { this.page = null; }
+  #browser(g, w, h) {
+    const p = this.page;
+    const FONT = '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif';
+    const color = SITE_COLORS.find(([k]) => p.site.includes(k))?.[1] ?? '#3b4a6b';
+    g.fillStyle = '#d6dbe4'; g.fillRect(0, 0, w, h); // 别用纯白：夜里会被辉光冲成一片
+    // 顶栏：网站颜色 + 名字 + 地址栏
+    g.fillStyle = color; g.fillRect(0, 0, w, 24);
+    g.textBaseline = 'middle'; g.textAlign = 'left';
+    g.fillStyle = '#fff'; g.font = `700 12px ${FONT}`;
+    g.fillText(p.site, 9, 12.5);
+    const sw = Math.min(g.measureText(p.site).width, 90);
+    g.fillStyle = 'rgba(255,255,255,0.28)'; roundRect(g, sw + 18, 6, w - sw - 28, 12, 6); g.fill();
+    // 正文区：标题（最多两行）+ 摘要，摘要慢慢往上滚
+    const wrap = (text, font, maxW, maxLines) => {
+      g.font = font; const lines = []; let cur = '';
+      for (const ch of text) {
+        if (g.measureText(cur + ch).width > maxW) { lines.push(cur); cur = ch; if (lines.length >= maxLines) break; } else cur += ch;
+      }
+      if (lines.length < maxLines && cur) lines.push(cur);
+      else if (lines.length >= maxLines) lines[maxLines - 1] = lines[maxLines - 1].slice(0, -1) + '…';
+      return lines;
+    };
+    const top = 24, inner = w - 26;
+    const scroll = Math.min(Math.max(0, p.t - 6) * 2.2, 60); // 先看几秒标题，再往下读
+    g.save(); g.beginPath(); g.rect(0, top, w, h - top); g.clip(); g.translate(0, -scroll);
+    g.textBaseline = 'alphabetic';
+    const titleLines = wrap(p.title || '（没有标题）', `700 15px ${FONT}`, inner, 2);
+    g.fillStyle = '#121826';
+    titleLines.forEach((l, i) => g.fillText(l, 10, top + 22 + i * 20));
+    let y = top + 22 + titleLines.length * 20 + 4;
+    g.fillStyle = '#6f7789'; g.font = `10px ${FONT}`; g.fillText('刚刚 · ' + p.site, 10, y); y += 16;
+    if (p.excerpt) {
+      g.fillStyle = '#343d50';
+      for (const l of wrap(p.excerpt, `12px ${FONT}`, inner, 12)) { g.fillText(l, 10, y); y += 17; }
+    }
+    g.fillStyle = 'rgba(60,70,100,0.12)'; // 没有摘要、或摘要读完了：下面是一行行灰条
+    for (let i = 0; i < 6; i++) { g.fillRect(10, y + i * 15, inner * (0.55 + ((i * 37) % 40) / 100), 6); }
+    g.restore();
+    // 右边的滚动条
+    g.fillStyle = 'rgba(0,0,0,0.08)'; g.fillRect(w - 6, top + 4, 3, h - top - 8);
+    g.fillStyle = 'rgba(0,0,0,0.25)'; g.fillRect(w - 6, top + 4 + (scroll / 60) * (h - top - 50), 3, 38);
   }
   /**
    * 屏幕上放一个指定的视频（主人分享的、或者她自己要看的）：显示它的封面、标题、UP 主和播放进度。
@@ -268,6 +321,8 @@ class LaptopScreen {
       g.fillStyle = 'rgba(120,150,220,0.06)'; g.beginPath(); g.moveTo(0, h); g.lineTo(w * 0.6, 0); g.lineTo(w, 0); g.lineTo(w * 0.4, h); g.fill();
     } else if (this.video) {
       this.#player(g, w, h);
+    } else if (this.page) {
+      this.#browser(g, w, h);
     } else if (this.next) {
       const k = this.swipe * this.swipe * (3 - 2 * this.swipe);
       g.save(); g.translate(0, -h * k); this.#scene(g, this.cur, w, h, this.t); g.restore();
@@ -284,6 +339,7 @@ class LaptopScreen {
     if (!this.on) return;
     this.t += dt; this.acc += dt;
     if (this.video) { this.video.t += dt; if (this.acc > 0.25) { this.acc = 0; this.#draw(); } return; }
+    if (this.page) { this.page.t += dt; if (this.acc > 0.2) { this.acc = 0; this.#draw(); } return; }
     if (this.next) {
       this.swipe += dt * 2.6;
       if (this.swipe >= 1) { this.cur = this.next; this.next = null; this.left = 4 + Math.random() * 7; }
@@ -293,6 +349,13 @@ class LaptopScreen {
     }
     if (this.acc > 0.09) { this.acc = 0; this.#draw(); }
   }
+}
+
+/** 笔记本上网时各网站顶栏的颜色（按名字里含的字认）。 */
+const SITE_COLORS = [['牛客', '#1fb48e'], ['小红书', '#ff2442'], ['百度', '#4e6ef2'], ['澎湃', '#1a7fd1'], ['IT之家', '#d22222'], ['少数派', '#d7262f'], ['量子位', '#2f5bea'], ['阮一峰', '#5c6b7a'], ['B 站', '#fb7299'], ['QQ', '#12b7f5']];
+
+function roundRect(g, x, y, w, h, r) {
+  g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r); g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
 }
 
 function heart(g, x, y, s) {

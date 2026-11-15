@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { OneBotBridge, findBiliLink } from './bridge/onebot.mjs';
+import { readMood, readLife } from './bridge/mood.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -97,6 +98,34 @@ if (config.onebot?.enabled) {
   bridge.start();
 }
 const bridgeStatus = () => (bridge ? bridge.status() : { enabled: false, connected: false });
+
+// ---------- 她的心情（DSH 插件「鱼的心情」记的）：变了就推给页面，她的表情和想做的事跟着变 ----------
+let mood = null, moodSig = '';
+function refreshMood() {
+  if (config.mood?.enabled === false) return;
+  const m = readMood(config.mood ?? {});
+  const sig = m ? `${m.value}|${m.top.map((t) => t.key + t.value).join(',')}|${m.updatedAt}` : '';
+  if (sig === moodSig) return;
+  if (m && !mood) log(`[心情] ${m.emoji} ${m.label}（${m.value}）`);
+  else if (m && m.updatedAt !== mood?.updatedAt) log(`[心情] ${m.emoji} ${m.label}（${m.value}）${m.reason ? '：' + m.reason : ''}`);
+  moodSig = sig; mood = m;
+  broadcast({ type: 'mood', mood });
+}
+refreshMood();
+setInterval(refreshMood, 15000).unref();
+
+// ---------- 她的作息（装了 dsh-jingjing 的话）：她几点睡、几点起由那边定，房间跟着 ----------
+let life = null, lifeSig = '';
+function refreshLife() {
+  const l = readLife(config.mood ?? {});
+  const sig = l ? String(l.asleep) : '';
+  if (sig === lifeSig) return;
+  if (l) log(l.asleep ? '[作息] 她该睡觉了（dsh-jingjing 定的）' : '[作息] 她醒着（dsh-jingjing 定的）');
+  lifeSig = sig; life = l;
+  broadcast({ type: 'life', life });
+}
+refreshLife();
+setInterval(refreshLife, 15000).unref();
 
 // 房间醒了 / 睡着了 / 关了，在终端里说一声，方便看出是浏览器把它冻住了
 let lastKind = 'closed';
@@ -262,6 +291,7 @@ const ACTIONS = {
   phone: '趴在床上刷手机',
   eat: '去电饭煲盛一大碗白饭，坐下用勺子吃完，然后洗碗、把碗放回去',
   watch: '去电脑前看一个 B 站视频（电脑屏幕上会显示它的封面和标题）。target: BV 号或视频链接',
+  browse: '去电脑前上网：屏幕上显示正在看的那一页（网站名、标题、正文开头）。已经坐在电脑前上网的话，直接换成这一页。target: 网站名（牛客、小红书、IT之家……），text: 标题；也可以给 page: { site, title, excerpt }',
   think: '心里话 / 碎碎念：头顶冒一个云朵气泡（只在房间里显示，不会发到 QQ）。text: 内容',
   photo: '用手机拍一张照片发到主人的 QQ。target 可选: selfie 自拍（默认）| window 窗外 | food 饭（碗是空的就先盛一碗，拍完吃掉）| plant 盆栽 | laptop 电脑 | ball 小球 | bed 床 | room 房间 | ahead 面前的东西',
   music: '去按一下小音箱，让这台 Mac 的「音乐」App 放歌单 / 停下。target: on | off | toggle（默认）| next 下一首',
@@ -353,7 +383,7 @@ const server = http.createServer(async (req, res) => {
   try {
     if (p === '/events') {
       res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', connection: 'keep-alive' });
-      res.write(`data: ${JSON.stringify({ type: 'hello', name: config.character?.name ?? '大肥鱼', bridge: bridgeStatus(), recent, music: { enabled: config.music?.enabled !== false, auto: config.music?.auto !== false, playlist: config.music?.playlist || '大肥鱼的歌单' } })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: 'hello', name: config.character?.name ?? '大肥鱼', bridge: bridgeStatus(), recent, music: { enabled: config.music?.enabled !== false, auto: config.music?.auto !== false, playlist: config.music?.playlist || '大肥鱼的歌单' }, mood, life })}\n\n`);
       const pg = pageOf(url.searchParams.get('page'));
       pg.conns.add(res); pg.connectedAt = Date.now(); pg.asleepAt = 0; // 能连上来，说明它醒着
       const ping = setInterval(() => res.write(': ping\n\n'), 20000);
@@ -363,7 +393,7 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/state' && req.method === 'GET') {
       const st = roomStatus();
       const now = Date.now();
-      if (st.kind === 'open' && st.page.state) json(res, 200, { roomOpen: true, state: st.page.state, qq: bridgeStatus() });
+      if (st.kind === 'open' && st.page.state) json(res, 200, { roomOpen: true, state: st.page.state, mood, qq: bridgeStatus() });
       else if (st.kind === 'asleep') {
         json(res, 200, {
           roomOpen: false, roomAsleep: true, note: ASLEEP_NOTE,
@@ -444,7 +474,13 @@ const server = http.createServer(async (req, res) => {
         const ref = findBiliLink(body.target ?? body.text ?? '');
         if (ref) { try { video = await biliInfo(ref); } catch (err) { log('[bili] 查不到视频信息: ' + err.message); } }
       }
-      const ev = { type: 'act', action, target: body.target ?? null, text: body.text ?? null, video, at: Date.now() };
+      let page = null;
+      if (action === 'browse') { // 冲浪工具报过来的这一页：只留几个字段、截短，免得把什么都塞给页面
+        const p = body.page && typeof body.page === 'object' ? body.page : {};
+        const str = (v, n) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
+        page = { site: str(p.site ?? body.target, 20) || '网页', title: str(p.title ?? body.text, 120), excerpt: str(p.excerpt, 240) };
+      }
+      const ev = { type: 'act', action, target: body.target ?? null, text: body.text ?? null, video, page, at: Date.now() };
       const wait = [true, 1, 'true', '1', 'yes'].includes(body.wait);
       const what = `${action} ${typeof ev.target === 'object' && ev.target ? JSON.stringify(ev.target) : ev.target ?? ''} ${ev.text ?? ''}`.trim();
       if (wait) {
@@ -466,8 +502,8 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     if (p === '/api/read-wait' && req.method === 'GET') {
-      // QQ 插件在发她写好的回复之前来问：她把你的消息看完了没？看完了才回，最多等 timeout 秒。
-      // 这样她总是先跑去拿起手机、看完你说了什么，回复才发到你 QQ 上。
+      // QQ 插件在发她写好的话之前来问：手机在她手里、你的消息也看完了没？是了才发，最多等 timeout 秒。
+      // 手机不在手里，她会先去拿（在吃饭就把碗搁下）。这样每句话都是她拿着手机打出来的。
       // 房间没开、或者页面睡着了（身体不会动，等也白等），就立刻放行。
       const st = roomStatus();
       if (st.kind !== 'open') { json(res, 200, { ready: true, roomOpen: false, ...(st.kind === 'asleep' ? { roomAsleep: true } : {}) }); return; }

@@ -53,6 +53,21 @@ export class UI {
     $('btn-follow').addEventListener('click', () => { const on = $('btn-follow').classList.toggle('on'); this.#emit('follow', on); });
     $('btn-reset').addEventListener('click', () => { $('btn-follow').classList.remove('on'); this.#emit('reset'); });
     $('btn-sound').addEventListener('click', () => this.#emit('sound'));
+    // 底部按钮收起 / 展开，记住上次的选择
+    const dock = $('dock'), dockBtn = $('dock-toggle');
+    const setDock = (collapsed) => {
+      dock.classList.toggle('collapsed', collapsed);
+      document.body.classList.toggle('dock-collapsed', collapsed);
+      dockBtn.setAttribute('aria-expanded', String(!collapsed));
+      dockBtn.title = collapsed ? '展开底部按钮' : '收起底部按钮';
+      dockBtn.querySelector('span').textContent = collapsed ? '展开' : '收起';
+    };
+    try { setDock(localStorage.getItem('whaleRoom.dockCollapsed') === '1'); } catch { setDock(false); }
+    dockBtn.addEventListener('click', () => {
+      const collapsed = !dock.classList.contains('collapsed');
+      setDock(collapsed);
+      try { localStorage.setItem('whaleRoom.dockCollapsed', collapsed ? '1' : '0'); } catch { /* 存不了就只管这一次 */ }
+    });
     $('snap').addEventListener('click', () => $('snap').classList.remove('show'));
     const send = (kind) => {
       const input = $('test-text');
@@ -94,6 +109,14 @@ export class UI {
     clearTimeout(this.snapTimer); this.snapTimer = setTimeout(() => s.classList.remove('show'), 9000);
   }
   /** 顶部的「正在放的歌」。传 null 收起。 */
+  /** 顶上的心情小牌子：DSH 插件「鱼的心情」记的。鼠标放上去看数值、情绪和为什么。 */
+  setMood(m) {
+    const c = $('chip-mood');
+    c.hidden = !m;
+    if (!m) return;
+    c.textContent = `${m.emoji} ${m.label}${m.top?.[0] ? ' · ' + m.top[0].label : ''}`;
+    c.title = `她的心情 ${m.value}/100${m.top?.length ? '，' + m.top.map((t) => `${t.label} ${t.value}`).join('、') : ''}${m.reason ? '\n最近一次：' + m.reason : ''}`;
+  }
   setMusic(text) { const c = $('chip-music'); c.hidden = !text; c.textContent = text ? '♪ ' + text : ''; }
   setSound(on) { $('btn-sound').classList.toggle('on', on); }
   think(on) { if (on) { this.speechB.hide(); this.museB.hide(); this.thinkB.text('···', 9999, this.now); } else this.thinkB.hide(); }
